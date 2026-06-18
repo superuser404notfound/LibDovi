@@ -1,5 +1,5 @@
 # Rust build artifacts
 build/
 
-# XCFramework binary (large; ship via release, not git)
-Dovi.xcframework/
+# Dovi.xcframework IS committed (mirrors FFmpegBuild: prebuilt binaries in-repo,
+# consumed as a versioned remote SwiftPM package). build.sh regenerates it.

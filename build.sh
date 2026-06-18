@@ -154,8 +154,15 @@ cp "$LIB_SIM"   "$STAGE_DIR/tvos-sim/libdovi.a"
 cp "$LIB_MACOS" "$STAGE_DIR/macos/libdovi.a"
 
 # Copy header into each slice's Headers dir (xcodebuild expects a directory)
+# Also write a module.modulemap so Swift can import Dovi directly.
 for slice in tvos tvos-sim macos; do
     cp "$HEADER_TVOS" "$STAGE_DIR/$slice/Headers/dovi.h"
+    cat > "$STAGE_DIR/$slice/Headers/module.modulemap" << 'MODULEMAP'
+module Dovi {
+    header "dovi.h"
+    export *
+}
+MODULEMAP
 done
 
 # Remove existing xcframework to allow idempotent re-runs
