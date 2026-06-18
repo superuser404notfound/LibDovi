@@ -1,0 +1,5 @@
+# Rust build artifacts
+build/
+
+# XCFramework binary (large; ship via release, not git)
+Dovi.xcframework/
