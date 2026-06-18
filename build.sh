@@ -2,14 +2,26 @@
 # build.sh — cross-compile libdovi for Apple slices and package as Dovi.xcframework
 # Usage: ./build.sh
 # Outputs: ~/Dev/LibDovi/Dovi.xcframework
+#
+# Five xcframework slices:
+#   macos-arm64_x86_64            (fat: Apple Silicon + Intel Macs)
+#   ios-arm64                     (device)
+#   ios-arm64_x86_64-simulator    (fat: Apple Silicon + Intel Macs)
+#   tvos-arm64                    (device)
+#   tvos-arm64-simulator          (Apple Silicon only)
+#
+# x86_64 is included for macOS and the iOS simulator (Intel-Mac support). The
+# tvOS simulator stays arm64-only: x86_64-apple-tvos is a low-tier Rust target
+# with no prebuilt std (would need nightly + build-std), and Intel-Mac tvOS
+# *simulator* use is not worth that cost. Everything here is stable Rust.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
+CARGO_DIR="$BUILD_DIR/cargo"
 XCFW_OUT="$SCRIPT_DIR/Dovi.xcframework"
 
-# Require cargo in ~/.cargo/bin (sourced or explicit path)
 export PATH="$HOME/.cargo/bin:$PATH"
 
 if ! command -v cargo &>/dev/null; then
@@ -22,22 +34,19 @@ if ! command -v cargo-cbuild &>/dev/null; then
 fi
 
 echo "==> cargo version: $(cargo --version)"
-echo "==> cargo-cbuild found: $(command -v cargo-cbuild)"
 
-# Ensure required rustup targets
 echo "==> Adding rustup targets..."
-rustup target add aarch64-apple-tvos
-rustup target add aarch64-apple-tvos-sim
-rustup target add aarch64-apple-ios
-rustup target add aarch64-apple-ios-sim
-# aarch64-apple-darwin is the host, always present
+rustup target add \
+    aarch64-apple-tvos aarch64-apple-tvos-sim \
+    aarch64-apple-ios aarch64-apple-ios-sim \
+    x86_64-apple-darwin x86_64-apple-ios
 
 # dolby_vision 3.3.2 lives in the dovi_tool repo at tag libdovi-3.3.2
 DOVI_TAG="libdovi-3.3.2"
 DOVI_REPO_DIR="$BUILD_DIR/dovi_tool"
 
 if [ -d "$DOVI_REPO_DIR" ]; then
-    echo "==> dovi_tool already cloned at $DOVI_REPO_DIR, skipping clone"
+    echo "==> dovi_tool already cloned, skipping clone"
 else
     mkdir -p "$BUILD_DIR"
     echo "==> Cloning dovi_tool at tag $DOVI_TAG..."
@@ -46,172 +55,110 @@ else
         "$DOVI_REPO_DIR"
 fi
 
-# The dolby_vision crate (with capi feature) is in the dolby_vision sub-crate
 CRATE_DIR="$DOVI_REPO_DIR/dolby_vision"
 if [ ! -f "$CRATE_DIR/Cargo.toml" ]; then
     echo "ERROR: dolby_vision crate not found at $CRATE_DIR" >&2
     exit 1
 fi
 
-echo "==> Building for aarch64-apple-tvos (device)..."
-SDK_TVOS="$(xcrun --sdk appletvos --show-sdk-path)"
-CLANG_TVOS="$(xcrun --sdk appletvos --find clang)"
-(
-  cd "$CRATE_DIR"
-  CC="$CLANG_TVOS" \
-  CFLAGS="-isysroot $SDK_TVOS -mtvos-version-min=17.0" \
-  cargo cbuild --release --features capi \
-    --target aarch64-apple-tvos \
-    --target-dir "$BUILD_DIR/cargo"
-)
+# build_slice <triple> <sdk-or-empty> <min-cflag-or-empty>
+build_slice() {
+    local triple="$1" sdk="$2" mincflag="$3"
+    echo "==> Building $triple..."
+    if [ -z "$sdk" ]; then
+        ( cd "$CRATE_DIR"
+          cargo cbuild --release --features capi \
+            --target "$triple" --target-dir "$CARGO_DIR" )
+    else
+        local sdkpath cc
+        sdkpath="$(xcrun --sdk "$sdk" --show-sdk-path)"
+        cc="$(xcrun --sdk "$sdk" --find clang)"
+        ( cd "$CRATE_DIR"
+          CC="$cc" CFLAGS="-isysroot $sdkpath $mincflag" \
+          cargo cbuild --release --features capi \
+            --target "$triple" --target-dir "$CARGO_DIR" )
+    fi
+}
 
-echo "==> Building for aarch64-apple-tvos-sim (simulator)..."
-SDK_SIM="$(xcrun --sdk appletvsimulator --show-sdk-path)"
-CLANG_SIM="$(xcrun --sdk appletvsimulator --find clang)"
-(
-  cd "$CRATE_DIR"
-  CC="$CLANG_SIM" \
-  CFLAGS="-isysroot $SDK_SIM -mtvos-simulator-version-min=17.0" \
-  cargo cbuild --release --features capi \
-    --target aarch64-apple-tvos-sim \
-    --target-dir "$BUILD_DIR/cargo"
-)
+# tvOS
+build_slice aarch64-apple-tvos     appletvos        "-mtvos-version-min=17.0"
+build_slice aarch64-apple-tvos-sim appletvsimulator "-mtvos-simulator-version-min=17.0"
+# iOS
+build_slice aarch64-apple-ios      iphoneos         "-mios-version-min=16.0"
+build_slice aarch64-apple-ios-sim  iphonesimulator  "-mios-simulator-version-min=16.0"
+build_slice x86_64-apple-ios       iphonesimulator  "-mios-simulator-version-min=16.0"
+# macOS
+build_slice aarch64-apple-darwin   ""               ""
+build_slice x86_64-apple-darwin    ""               ""
 
-echo "==> Building for aarch64-apple-darwin (macOS host)..."
-(
-  cd "$CRATE_DIR"
-  cargo cbuild --release --features capi \
-    --target aarch64-apple-darwin \
-    --target-dir "$BUILD_DIR/cargo"
-)
-
-echo "==> Building for aarch64-apple-ios (device)..."
-SDK_IOS="$(xcrun --sdk iphoneos --show-sdk-path)"
-CLANG_IOS="$(xcrun --sdk iphoneos --find clang)"
-(
-  cd "$CRATE_DIR"
-  CC="$CLANG_IOS" \
-  CFLAGS="-isysroot $SDK_IOS -mios-version-min=16.0" \
-  cargo cbuild --release --features capi \
-    --target aarch64-apple-ios \
-    --target-dir "$BUILD_DIR/cargo"
-)
-
-echo "==> Building for aarch64-apple-ios-sim (simulator)..."
-SDK_IOS_SIM="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-CLANG_IOS_SIM="$(xcrun --sdk iphonesimulator --find clang)"
-(
-  cd "$CRATE_DIR"
-  CC="$CLANG_IOS_SIM" \
-  CFLAGS="-isysroot $SDK_IOS_SIM -mios-simulator-version-min=16.0" \
-  cargo cbuild --release --features capi \
-    --target aarch64-apple-ios-sim \
-    --target-dir "$BUILD_DIR/cargo"
-)
-
-# Locate the built static libraries
+# Locate a built static library for a triple.
 find_lib() {
     local triple="$1"
-    local candidate="$BUILD_DIR/cargo/$triple/release/libdovi.a"
-    if [ -f "$candidate" ]; then
-        echo "$candidate"
-        return
-    fi
-    # cargo-c may put it under a different sub-path
+    local candidate="$CARGO_DIR/$triple/release/libdovi.a"
+    if [ -f "$candidate" ]; then echo "$candidate"; return; fi
     local found
-    found="$(find "$BUILD_DIR/cargo/$triple/release" -name "libdovi.a" 2>/dev/null | head -1)"
-    if [ -n "$found" ]; then
-        echo "$found"
-        return
-    fi
-    echo "ERROR: libdovi.a not found for $triple under $BUILD_DIR/cargo/$triple/release" >&2
+    found="$(find "$CARGO_DIR/$triple/release" -maxdepth 1 -name "libdovi.a" 2>/dev/null | head -1)"
+    if [ -n "$found" ]; then echo "$found"; return; fi
+    echo "ERROR: libdovi.a not found for $triple" >&2
     exit 1
 }
 
-LIB_TVOS="$(find_lib aarch64-apple-tvos)"
-LIB_SIM="$(find_lib aarch64-apple-tvos-sim)"
-LIB_MACOS="$(find_lib aarch64-apple-darwin)"
-LIB_IOS="$(find_lib aarch64-apple-ios)"
-LIB_IOS_SIM="$(find_lib aarch64-apple-ios-sim)"
-
-echo "==> tvOS device lib:    $LIB_TVOS"
-echo "==> tvOS sim lib:       $LIB_SIM"
-echo "==> macOS lib:          $LIB_MACOS"
-echo "==> iOS device lib:     $LIB_IOS"
-echo "==> iOS sim lib:        $LIB_IOS_SIM"
-
-# Locate the generated header (cargo-c places it alongside the .a)
+# Locate the cargo-c generated header (cbindgen emits it under
+# include/<crate>/, named rpu_parser.h). It is the same for every slice and is
+# staged as dovi.h so `import Dovi` resolves the module's umbrella header.
 find_header() {
-    local triple="$1"
-    local dir
-    dir="$(dirname "$(find_lib "$triple")")"
-    # cargo-c generates dovi.h next to the .a
-    local candidate="$dir/dovi.h"
-    if [ -f "$candidate" ]; then
-        echo "$candidate"
-        return
+    local base="$CARGO_DIR/aarch64-apple-tvos/release" found
+    found="$(find "$base" -name "*.h" 2>/dev/null | grep -iE 'rpu_parser|dovi' | head -1)"
+    if [ -z "$found" ]; then
+        found="$(find "$base" -name "*.h" 2>/dev/null | head -1)"
     fi
-    # Some cargo-c versions put it in include/
-    local found
-    found="$(find "$BUILD_DIR/cargo/$triple/release" -name "*.h" 2>/dev/null | head -1)"
-    if [ -n "$found" ]; then
-        echo "$found"
-        return
-    fi
-    # Also check top-level include in crate dir
-    found="$(find "$CRATE_DIR" -maxdepth 3 -name "dovi.h" 2>/dev/null | head -1)"
-    if [ -n "$found" ]; then
-        echo "$found"
-        return
-    fi
-    echo "ERROR: dovi.h not found for $triple" >&2
-    exit 1
+    if [ -z "$found" ]; then echo "ERROR: cargo-c header (*.h) not found under $base" >&2; exit 1; fi
+    echo "$found"
 }
 
-HEADER_TVOS="$(find_header aarch64-apple-tvos)"
-echo "==> Header: $HEADER_TVOS"
+HEADER="$(find_header)"
+echo "==> Header: $HEADER"
 
-# Prepare per-slice staging directories for xcodebuild -create-xcframework
-# The -library flag takes a .a; the -headers flag takes a directory.
 STAGE_DIR="$BUILD_DIR/xcfw_stage"
 rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR/tvos/Headers"
-mkdir -p "$STAGE_DIR/tvos-sim/Headers"
-mkdir -p "$STAGE_DIR/macos/Headers"
-mkdir -p "$STAGE_DIR/ios/Headers"
-mkdir -p "$STAGE_DIR/ios-sim/Headers"
 
-cp "$LIB_TVOS"    "$STAGE_DIR/tvos/libdovi.a"
-cp "$LIB_SIM"     "$STAGE_DIR/tvos-sim/libdovi.a"
-cp "$LIB_MACOS"   "$STAGE_DIR/macos/libdovi.a"
-cp "$LIB_IOS"     "$STAGE_DIR/ios/libdovi.a"
-cp "$LIB_IOS_SIM" "$STAGE_DIR/ios-sim/libdovi.a"
-
-# Copy header into each slice's Headers dir (xcodebuild expects a directory)
-# Also write a module.modulemap so Swift can import Dovi directly.
-for slice in tvos tvos-sim macos ios ios-sim; do
-    cp "$HEADER_TVOS" "$STAGE_DIR/$slice/Headers/dovi.h"
-    cat > "$STAGE_DIR/$slice/Headers/module.modulemap" << 'MODULEMAP'
+# stage_slice <slice-name> <.a path>
+stage_slice() {
+    local name="$1" lib="$2"
+    mkdir -p "$STAGE_DIR/$name/Headers"
+    cp "$lib" "$STAGE_DIR/$name/libdovi.a"
+    cp "$HEADER" "$STAGE_DIR/$name/Headers/dovi.h"
+    cat > "$STAGE_DIR/$name/Headers/module.modulemap" << 'MODULEMAP'
 module Dovi {
     header "dovi.h"
     export *
 }
 MODULEMAP
-done
+}
 
-# Remove existing xcframework to allow idempotent re-runs
+# Fat macOS + iOS-simulator slices via lipo (arm64 + x86_64); single-arch for
+# the devices and the tvOS simulator.
+mkdir -p "$STAGE_DIR/fat"
+lipo -create "$(find_lib aarch64-apple-darwin)"  "$(find_lib x86_64-apple-darwin)" -output "$STAGE_DIR/fat/macos.a"
+lipo -create "$(find_lib aarch64-apple-ios-sim)" "$(find_lib x86_64-apple-ios)"    -output "$STAGE_DIR/fat/ios-sim.a"
+
+stage_slice macos    "$STAGE_DIR/fat/macos.a"
+stage_slice ios-sim  "$STAGE_DIR/fat/ios-sim.a"
+stage_slice tvos-sim "$(find_lib aarch64-apple-tvos-sim)"
+stage_slice ios      "$(find_lib aarch64-apple-ios)"
+stage_slice tvos     "$(find_lib aarch64-apple-tvos)"
+
 rm -rf "$XCFW_OUT"
-
 echo "==> Assembling Dovi.xcframework..."
 xcodebuild -create-xcframework \
-    -library "$STAGE_DIR/tvos/libdovi.a"     -headers "$STAGE_DIR/tvos/Headers" \
-    -library "$STAGE_DIR/tvos-sim/libdovi.a" -headers "$STAGE_DIR/tvos-sim/Headers" \
-    -library "$STAGE_DIR/macos/libdovi.a"    -headers "$STAGE_DIR/macos/Headers" \
-    -library "$STAGE_DIR/ios/libdovi.a"      -headers "$STAGE_DIR/ios/Headers" \
-    -library "$STAGE_DIR/ios-sim/libdovi.a"  -headers "$STAGE_DIR/ios-sim/Headers" \
+    -library "$STAGE_DIR/macos/libdovi.a"     -headers "$STAGE_DIR/macos/Headers" \
+    -library "$STAGE_DIR/ios/libdovi.a"        -headers "$STAGE_DIR/ios/Headers" \
+    -library "$STAGE_DIR/ios-sim/libdovi.a"    -headers "$STAGE_DIR/ios-sim/Headers" \
+    -library "$STAGE_DIR/tvos/libdovi.a"       -headers "$STAGE_DIR/tvos/Headers" \
+    -library "$STAGE_DIR/tvos-sim/libdovi.a"   -headers "$STAGE_DIR/tvos-sim/Headers" \
     -output "$XCFW_OUT"
 
 echo ""
-echo "==> Done! XCFramework at: $XCFW_OUT"
-echo "==> Contents:"
+echo "==> Done. XCFramework at: $XCFW_OUT"
 ls "$XCFW_OUT"
+for a in "$XCFW_OUT"/*/libdovi.a; do echo "  $a:"; lipo -info "$a" 2>/dev/null | sed 's/^/    /'; done
