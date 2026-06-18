@@ -28,6 +28,8 @@ echo "==> cargo-cbuild found: $(command -v cargo-cbuild)"
 echo "==> Adding rustup targets..."
 rustup target add aarch64-apple-tvos
 rustup target add aarch64-apple-tvos-sim
+rustup target add aarch64-apple-ios
+rustup target add aarch64-apple-ios-sim
 # aarch64-apple-darwin is the host, always present
 
 # dolby_vision 3.3.2 lives in the dovi_tool repo at tag libdovi-3.3.2
@@ -83,6 +85,30 @@ echo "==> Building for aarch64-apple-darwin (macOS host)..."
     --target-dir "$BUILD_DIR/cargo"
 )
 
+echo "==> Building for aarch64-apple-ios (device)..."
+SDK_IOS="$(xcrun --sdk iphoneos --show-sdk-path)"
+CLANG_IOS="$(xcrun --sdk iphoneos --find clang)"
+(
+  cd "$CRATE_DIR"
+  CC="$CLANG_IOS" \
+  CFLAGS="-isysroot $SDK_IOS -mios-version-min=16.0" \
+  cargo cbuild --release --features capi \
+    --target aarch64-apple-ios \
+    --target-dir "$BUILD_DIR/cargo"
+)
+
+echo "==> Building for aarch64-apple-ios-sim (simulator)..."
+SDK_IOS_SIM="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+CLANG_IOS_SIM="$(xcrun --sdk iphonesimulator --find clang)"
+(
+  cd "$CRATE_DIR"
+  CC="$CLANG_IOS_SIM" \
+  CFLAGS="-isysroot $SDK_IOS_SIM -mios-simulator-version-min=16.0" \
+  cargo cbuild --release --features capi \
+    --target aarch64-apple-ios-sim \
+    --target-dir "$BUILD_DIR/cargo"
+)
+
 # Locate the built static libraries
 find_lib() {
     local triple="$1"
@@ -105,10 +131,14 @@ find_lib() {
 LIB_TVOS="$(find_lib aarch64-apple-tvos)"
 LIB_SIM="$(find_lib aarch64-apple-tvos-sim)"
 LIB_MACOS="$(find_lib aarch64-apple-darwin)"
+LIB_IOS="$(find_lib aarch64-apple-ios)"
+LIB_IOS_SIM="$(find_lib aarch64-apple-ios-sim)"
 
 echo "==> tvOS device lib:    $LIB_TVOS"
 echo "==> tvOS sim lib:       $LIB_SIM"
 echo "==> macOS lib:          $LIB_MACOS"
+echo "==> iOS device lib:     $LIB_IOS"
+echo "==> iOS sim lib:        $LIB_IOS_SIM"
 
 # Locate the generated header (cargo-c places it alongside the .a)
 find_header() {
@@ -148,14 +178,18 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/tvos/Headers"
 mkdir -p "$STAGE_DIR/tvos-sim/Headers"
 mkdir -p "$STAGE_DIR/macos/Headers"
+mkdir -p "$STAGE_DIR/ios/Headers"
+mkdir -p "$STAGE_DIR/ios-sim/Headers"
 
-cp "$LIB_TVOS"  "$STAGE_DIR/tvos/libdovi.a"
-cp "$LIB_SIM"   "$STAGE_DIR/tvos-sim/libdovi.a"
-cp "$LIB_MACOS" "$STAGE_DIR/macos/libdovi.a"
+cp "$LIB_TVOS"    "$STAGE_DIR/tvos/libdovi.a"
+cp "$LIB_SIM"     "$STAGE_DIR/tvos-sim/libdovi.a"
+cp "$LIB_MACOS"   "$STAGE_DIR/macos/libdovi.a"
+cp "$LIB_IOS"     "$STAGE_DIR/ios/libdovi.a"
+cp "$LIB_IOS_SIM" "$STAGE_DIR/ios-sim/libdovi.a"
 
 # Copy header into each slice's Headers dir (xcodebuild expects a directory)
 # Also write a module.modulemap so Swift can import Dovi directly.
-for slice in tvos tvos-sim macos; do
+for slice in tvos tvos-sim macos ios ios-sim; do
     cp "$HEADER_TVOS" "$STAGE_DIR/$slice/Headers/dovi.h"
     cat > "$STAGE_DIR/$slice/Headers/module.modulemap" << 'MODULEMAP'
 module Dovi {
@@ -173,6 +207,8 @@ xcodebuild -create-xcframework \
     -library "$STAGE_DIR/tvos/libdovi.a"     -headers "$STAGE_DIR/tvos/Headers" \
     -library "$STAGE_DIR/tvos-sim/libdovi.a" -headers "$STAGE_DIR/tvos-sim/Headers" \
     -library "$STAGE_DIR/macos/libdovi.a"    -headers "$STAGE_DIR/macos/Headers" \
+    -library "$STAGE_DIR/ios/libdovi.a"      -headers "$STAGE_DIR/ios/Headers" \
+    -library "$STAGE_DIR/ios-sim/libdovi.a"  -headers "$STAGE_DIR/ios-sim/Headers" \
     -output "$XCFW_OUT"
 
 echo ""
