@@ -14,6 +14,12 @@ Used by [AetherEngine](https://github.com/superuser404notfound/AetherEngine) to 
 
 `import Dovi` exposes the libdovi C API (`dovi_parse_unspec62_nalu`, `dovi_convert_rpu_with_mode`, `dovi_write_unspec62_nalu`, the free functions, etc.).
 
+## Additions to the upstream C API
+
+`patches/` holds additions to the C API, applied by `build.sh` on top of the pinned dovi_tool tag. They only add entry points; nothing upstream is changed or removed.
+
+- `dovi_rpu_set_polynomial_mapping(rpu, component, pivots, num_pivots, coefs)` replaces one component's reshaping curve with a piecewise second-order polynomial: 2 to 9 absolute pivots, and `c0, c1, c2` per piece in the normalised domain (`out = c0 + c1*x + c2*x^2`, input and output in [0, 1]). It accepts only profile 8 RPUs with fixed-point coefficients, splits each coefficient into its integer and `coefficient_log2_denom` fraction parts, and marks the RPU modified so the CRC is rewritten on the next write.
+
 ## Slices
 
 `Dovi.xcframework` ships seven slices:

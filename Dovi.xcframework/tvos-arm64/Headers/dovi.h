@@ -724,6 +724,27 @@ int32_t dovi_rpu_remove_mapping(DoviRpuOpaque *ptr);
 
 /**
  * # Safety
+ * The struct pointer must be valid. `pivots` must point to `num_pivots` values and
+ * `coefs` to `3 * (num_pivots - 1)` values.
+ *
+ * Replaces one component's reshaping curve with a piecewise second-order polynomial.
+ * Only for profile 8 RPUs with fixed-point coefficients (`coefficient_data_type` 0).
+ *
+ * `pivots` are absolute base-layer codes, strictly increasing, 2 to 9 of them.
+ * `coefs` holds `c0, c1, c2` per piece, in the RPU's normalised domain:
+ * `out = c0 + c1 * x + c2 * x^2` with input and output scaled to [0, 1].
+ *
+ * Returns 0 on success, -1 on error.
+ * If an error occurs, it is logged to RpuOpaque.error.
+ */
+int32_t dovi_rpu_set_polynomial_mapping(DoviRpuOpaque *ptr,
+                                        uint8_t component,
+                                        const uint16_t *pivots,
+                                        size_t num_pivots,
+                                        const double *coefs);
+
+/**
+ * # Safety
  * The struct pointer must be valid.
  *
  * Adds default CMv4.0 extension metadata (L3, L9, L11, L254) to the RPU.
