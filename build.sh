@@ -69,6 +69,19 @@ else
 fi
 
 CRATE_DIR="$DOVI_REPO_DIR/dolby_vision"
+
+# Local additions to the C API, kept as patches against the pinned tag. A checkout that already
+# carries a patch is left alone; one that carries something else fails the build instead of
+# packaging an xcframework whose header does not match the patch set.
+for patch in "$SCRIPT_DIR"/patches/*.patch; do
+    [ -e "$patch" ] || continue
+    if git -C "$DOVI_REPO_DIR" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "==> Patch already applied: $(basename "$patch")"
+    else
+        echo "==> Applying patch: $(basename "$patch")"
+        git -C "$DOVI_REPO_DIR" apply "$patch"
+    fi
+done
 if [ ! -f "$CRATE_DIR/Cargo.toml" ]; then
     echo "ERROR: dolby_vision crate not found at $CRATE_DIR" >&2
     exit 1
